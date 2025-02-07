@@ -125,7 +125,6 @@ impl Drop for Peripage {
 fn main() {
 	println!("libusb version: {:?}", rusb::version());
 	println!("Kernel supports detaching driver: {}", rusb::supports_detach_kernel_driver());
-
 	
 	let ctx = rusb::Context::new().expect("cannot connect to libusb");
 
@@ -148,11 +147,11 @@ fn main() {
 	let mut packet = Vec::new();
 	packet.extend_from_slice(header);
 
-	const HEIGHT: u16 = 512;
+	const HEIGHT: u16 = 24;
 	const BPC: usize = 48 * HEIGHT as usize;
 	img
 		.chunks(BPC)
-		.chain(std::iter::repeat_n(&[0u8; BPC] as &[u8], 0))
+		.chain(std::iter::repeat_n(&[0u8; BPC] as &[u8], 3))
 		.for_each(|chunk| {
 			packet.extend_from_slice(&[
 				0x1d, 0x76, 0x30, 0x00, 0x30, 0x00,
@@ -166,9 +165,6 @@ fn main() {
 		});
 
 	// send image
-	pp.write(&packet, 30).unwrap();
-	pp.confirm().unwrap();
-
 	pp.write(&packet, 30).unwrap();
 	pp.confirm().unwrap();
 }
