@@ -178,6 +178,16 @@ impl Printer {
 			Ok(())
 		})
 	}
+
+	pub fn handle(&mut self) -> &DeviceHandle<Context> {
+		&mut self.handle
+	}
+	pub fn endpoint_in(&self) -> u8 {
+		self.epin
+	}
+	pub fn endpoint_out(&self) -> u8 {
+		self.epout
+	}
 }
 
 pub fn usb_context() -> usb::Result<usb::Context> {
