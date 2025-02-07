@@ -1,7 +1,7 @@
 // Very helpful doc for USB: https://www.beyondlogic.org/usbnutshell/usb1.shtml
 use std::{iter::repeat_n, time::Duration};
 
-use rusb::{Context, DeviceHandle, Direction, TransferType, UsbContext};
+use rusb::{Context, Direction, TransferType, UsbContext};
 use thiserror::Error;
 
 pub use crate::doc::{Document, DocumentError};
@@ -25,22 +25,25 @@ pub enum Error {
 	NoPrinter,
 }
 
+pub type Device = rusb::Device<Context>;
+pub type DeviceHandle = rusb::DeviceHandle<Context>;
 pub type Result<T> = core::result::Result<T, Error>;
 
 mod doc;
 
 pub struct Printer {
-	handle: DeviceHandle<Context>,
+	handle: DeviceHandle,
 	epin: u8,
 	epout: u8,
 }
 
 impl Printer {
-	pub fn find(ctx: &Context) -> Result<Self> {
-		let dev = ctx
+	/// List all available printers.
+	pub fn list(ctx: &Context) -> Result<Vec<Device>> {
+		let devs = ctx
 			.devices()?
 			.iter()
-			.find(|dev| {
+			.filter(|dev| {
 				let Ok(desc) = dev.device_descriptor() else {
 					log::warn!("cannot get device descriptor for Bus {dev:?}");
 					return false
@@ -48,11 +51,19 @@ impl Printer {
 
 				desc.vendor_id() == VENDOR_ID && desc.product_id() == PRODUCT_ID
 			})
-			.ok_or(Error::NoPrinter)?;
-
-		Self::open(dev.open()?)
+			.collect();
+		Ok(devs)
 	}
-	pub fn open(handle: DeviceHandle<Context>) -> Result<Self> {
+	
+	/// Find the first printer and open it.
+	pub fn find(ctx: &Context) -> Result<Self> {
+		match Self::list(ctx)?.first() {
+			Some(dev) => Self::open(dev.open()?),
+			None => Err(Error::NoPrinter),
+		}
+	}
+	/// Open a specific printer.
+	pub fn open(handle: DeviceHandle) -> Result<Self> {
 		let dev = handle.device();
 
 		// automatically steal the USB device from the kernel
@@ -179,7 +190,7 @@ impl Printer {
 		})
 	}
 
-	pub fn handle(&mut self) -> &DeviceHandle<Context> {
+	pub fn handle(&mut self) -> &DeviceHandle {
 		&mut self.handle
 	}
 	pub fn endpoint_in(&self) -> u8 {
