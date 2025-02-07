@@ -1,0 +1,8 @@
+[package]
+name = "ppa6"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0.95"
+rusb = "0.9.4"
