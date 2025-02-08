@@ -1,11 +1,12 @@
 // Very helpful doc for USB: https://www.beyondlogic.org/usbnutshell/usb1.shtml
 use std::{iter::repeat_n, time::Duration};
 
-use rusb::{Context, Direction, TransferType, UsbContext};
+use rusb::{Direction, TransferType, UsbContext};
 use thiserror::Error;
 
 pub use crate::doc::{Document, DocumentError};
 pub use rusb as usb;
+pub use crate::usb::Context;
 
 /// USB vendor ID of the PeriPage A6.
 pub const VENDOR_ID: u16 = 0x09c5;

@@ -1,4 +1,4 @@
-use std::borrow::Cow;
+use std::{borrow::Cow, fmt::{self, Formatter, Debug}};
 
 use thiserror::Error;
 
@@ -42,11 +42,30 @@ impl<'a> Document<'a> {
 	}
 
 	pub fn height(&self) -> usize {
-		self.pixels.len() / Self::WIDTH
+		self.pixels.len() / (Self::WIDTH / 8)
 	}
 
 	pub fn pixels(&self) -> &[u8] {
 		&self.pixels
 	}
+
+	pub fn get(&self, x: usize, y: usize) -> Option<bool> {
+		if x >= self.width() || y >= self.height() {
+			return None;
+		}
+
+		let b = self.pixels[(y * self.width() + x) / 8];
+		Some(b & (128 >> (x % 8)) != 0)
+	}
 }
 
+
+impl Debug for Document<'_> {
+	fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+		f
+			.debug_struct("Document")
+			.field("width", &self.width())
+			.field("height", &self.height())
+			.finish()
+	}
+}
