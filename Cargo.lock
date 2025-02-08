@@ -2466,6 +2466,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "ppa6-cups"
+version = "0.1.0"
+dependencies = [
+ "ppa6",
+]
+
+[[package]]
 name = "ppa6-gui"
 version = "0.1.0"
 dependencies = [

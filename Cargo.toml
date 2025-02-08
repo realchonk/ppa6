@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
 	"ppa6",
+	"ppa6-cups",
 	"ppa6-gui"
 ]
 
