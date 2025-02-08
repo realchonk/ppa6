@@ -4,6 +4,6 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-ppa6 = { version = "0.1.0", path = "../ppa6" }
+ppa6 = { workspace = true }
 iced = { version = "0.13.1", features = ["advanced", "image"] }
 anyhow = "1.0.95"

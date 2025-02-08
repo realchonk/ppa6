@@ -4,4 +4,4 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-ppa6 = { path = "../ppa6", version = "0.1.0" }
+ppa6.workspace = true

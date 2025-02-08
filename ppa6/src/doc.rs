@@ -26,8 +26,8 @@ impl<'a> Document<'a> {
 	}
 
 	fn do_new(pixels: Cow<'a, [u8]>) -> Result<Self, DocumentError> {
-		let height = pixels.len() / Self::WIDTH;
-		let expected = Self::WIDTH * height;
+		let height = pixels.len() * 8 / Self::WIDTH;
+		let expected = Self::WIDTH * height / 8;
 		if expected != pixels.len() {
 			return Err(DocumentError::Len(expected, pixels.len()));
 		}

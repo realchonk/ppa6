@@ -3,6 +3,10 @@ resolver = "2"
 members = [
 	"ppa6",
 	"ppa6-cups",
-	"ppa6-gui"
+	"ppa6-gui",
+	"ppa6-print"
 ]
+
+[workspace.dependencies]
+ppa6 = { path = "ppa6", version = "0.1.0" }
 
