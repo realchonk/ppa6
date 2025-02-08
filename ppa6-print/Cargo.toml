@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 anyhow = "1.0.95"
+cosmic-text = "0.12.1"
 clap = { version = "4.5.28", features = ["derive"] }
 clap-num = "1.2.0"
 image = "0.25.5"

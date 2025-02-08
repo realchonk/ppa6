@@ -2,7 +2,8 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 use clap::Parser;
 use clap_num::maybe_hex;
-use image::{imageops::{dither, ColorMap, FilterType}, DynamicImage, GrayImage, ImageFormat, ImageReader, Luma};
+use cosmic_text::{Attrs, Buffer, Color, FontSystem, Metrics, Shaping, SwashCache};
+use image::{imageops::{dither, ColorMap, FilterType}, DynamicImage, GrayImage, ImageFormat, ImageReader, Luma, RgbImage};
 use ppa6::{usb_context, Document, Printer};
 use itertools::Itertools;
 
@@ -31,9 +32,25 @@ struct Cli {
 	#[arg(short, long, default_value_t = 0)]
 	rotate: usize,
 
-	/// Threshold for dithering
-	#[arg(short, long, default_value_t = 0x80, value_parser = maybe_hex::<u8>)]
+	/// Threshold for dithering.
+	#[arg(short = 'T', long, default_value_t = 0x80, value_parser = maybe_hex::<u8>)]
 	threshold: u8,
+
+	/// Treat `file` as a text file.
+	#[arg(short, long)]
+	text: bool,
+
+	/// Font size for `--text`. Anything below 12 starts to be difficult to read.
+	#[arg(short = 'S', long, default_value_t = 18.0)]
+	size: f32,
+
+	/// Font weight for `--text`. Good numbers are 600 and 800.
+	#[arg(short, long, default_value_t = 800)]
+	weight: u16,
+
+	/// Line Height Factor. This gets multiplied with the font size to get the line height.
+	#[arg(short, long, default_value_t = 1.0)]
+	line_height: f32,
 }
 
 struct BlackWhiteMap(u8);
@@ -92,9 +109,7 @@ fn rotate(img: GrayImage, deg: usize) -> GrayImage {
 	}
 }
 
-fn main() -> Result<()> {
-	let cli = Cli::parse();
-
+fn picture(cli: &Cli) -> Result<GrayImage> {
 	let img = ImageReader::open(&cli.file)?
 		.with_guessed_format()?
 		.decode()?
@@ -102,6 +117,66 @@ fn main() -> Result<()> {
 	let mut img = resize(rotate(img, cli.rotate));
 	assert_eq!(img.width(), 384);
 	dither(&mut img, &BlackWhiteMap(cli.threshold));
+	Ok(img)
+}
+
+// TODO: parse ANSI escape sequences
+fn text(cli: &Cli) -> Result<GrayImage> {
+	let text = std::fs::read_to_string(&cli.file)?;
+
+	let mut font_system = FontSystem::new();
+	let mut cache = SwashCache::new();
+	let metrics = Metrics::new(cli.size, cli.size * cli.line_height);
+	let mut buffer = Buffer::new(&mut font_system, metrics);
+	let mut buffer = buffer.borrow_with(&mut font_system);
+	buffer.set_size(Some(340.0), None);
+	let mut attrs = Attrs::new();
+	attrs.weight.0 = cli.weight;
+
+	buffer.set_text(&text, attrs, Shaping::Advanced);
+	buffer.shape_until_scroll(true);
+
+	let mut pixels = Vec::new();
+	let mut height = 0;
+
+	buffer.draw(&mut cache, Color::rgb(0xff, 0, 0), |x, y, w, h, color| {
+		let a = color.a();
+		if x < 0 || y < 0 || x > 384 || w != 1 || h != 1 || a == 0 {
+			return;
+		}
+		
+		let x = x as usize;
+		let y = y as usize;
+
+		if y >= height {
+			height = y + 1;
+			pixels.resize(3 * 384 * height, 0xff);
+		}
+		
+		let scale = |c: u8| {
+			let c = c as f32 / 255.0;
+			let a = a as f32 / 255.0;
+			let c = (c * a) + (1.0 * (1.0 - a));
+			(c * 255.0).clamp(0.0, 255.0) as u8
+		};
+		pixels[(y * 384 + x) * 3 + 0] = scale(color.r());
+		pixels[(y * 384 + x) * 3 + 1] = scale(color.g());
+		pixels[(y * 384 + x) * 3 + 2] = scale(color.b());
+	});
+	
+
+	let img = DynamicImage::ImageRgb8(RgbImage::from_vec(384, height as u32, pixels).unwrap());
+	Ok(img.into_luma8())
+}
+
+fn main() -> Result<()> {
+	let cli = Cli::parse();
+
+	let img = if cli.text {
+		text(&cli)
+	} else {
+		picture(&cli)
+	}?;
 
 	if cli.show {
 		let temppath = Path::new("/tmp/ppa6-preview.png");

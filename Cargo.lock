@@ -2881,6 +2881,7 @@ dependencies = [
  "anyhow",
  "clap",
  "clap-num",
+ "cosmic-text",
  "image 0.25.5",
  "itertools 0.14.0",
  "open",
