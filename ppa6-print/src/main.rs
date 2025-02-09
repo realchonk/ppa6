@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::{io::{Cursor, Read}, path::{Path, PathBuf}};
 use anyhow::Result;
 use clap::Parser;
 use clap_num::maybe_hex;
@@ -109,8 +109,8 @@ fn rotate(img: GrayImage, deg: usize) -> GrayImage {
 	}
 }
 
-fn picture(cli: &Cli) -> Result<GrayImage> {
-	let img = ImageReader::open(&cli.file)?
+fn picture(cli: &Cli, data: &[u8]) -> Result<GrayImage> {
+	let img = ImageReader::new(Cursor::new(data))
 		.with_guessed_format()?
 		.decode()?
 		.into_luma8();
@@ -121,8 +121,8 @@ fn picture(cli: &Cli) -> Result<GrayImage> {
 }
 
 // TODO: parse ANSI escape sequences
-fn text(cli: &Cli) -> Result<GrayImage> {
-	let text = std::fs::read_to_string(&cli.file)?;
+fn text(cli: &Cli, data: &[u8]) -> Result<GrayImage> {
+	let text = String::from_utf8(data.to_vec())?;
 
 	let mut font_system = FontSystem::new();
 	let mut cache = SwashCache::new();
@@ -172,10 +172,18 @@ fn text(cli: &Cli) -> Result<GrayImage> {
 fn main() -> Result<()> {
 	let cli = Cli::parse();
 
-	let img = if cli.text {
-		text(&cli)
+	let data = if cli.file == Path::new("-") {
+		let mut data = Vec::new();
+		std::io::stdin().read_to_end(&mut data)?;
+		data
 	} else {
-		picture(&cli)
+		std::fs::read(&cli.file)?
+	};
+
+	let img = if cli.text {
+		text(&cli, &data)
+	} else {
+		picture(&cli, &data)
 	}?;
 
 	if cli.show {
