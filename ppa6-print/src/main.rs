@@ -61,6 +61,10 @@ struct Cli {
 	#[arg(short, long, default_value_t = 0.0)]
 	contrast: f32,
 
+	/// Adjust the printer's concentration. Only values between `0..=2` are allowed.
+	#[arg(short = 'C', long)]
+	concentration: Option<u8>,
+
 	#[command(flatten)]
 	verbose: Verbosity,
 }
@@ -257,6 +261,9 @@ fn main() -> Result<()> {
 	log::info!("MAC: {:x?}", printer.get_mac()?);
 	log::info!("Battery: {}%", printer.get_battery()?);
 
+	if let Some(c) = cli.concentration {
+		printer.set_concentration(c)?;
+	}
 	
 	for _ in 0..cli.num {
 		printer.print_image_chunked(&pixels, 384)?;
