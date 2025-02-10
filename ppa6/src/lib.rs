@@ -147,11 +147,75 @@ impl Printer {
 		Ok(())
 	}
 
+	fn read(&mut self, buf: &mut [u8], timeout: u64) -> Result<usize> {
+		let n = self.handle.read_bulk(self.epin, buf, Duration::from_secs(timeout))?;
+		Ok(n)
+	}
+
+	fn query(&mut self, opcode: u32) -> Result<Vec<u8>> {
+		self.run(|s| {
+			let opcode = u32::to_be_bytes(opcode);
+			s.write(&opcode, 1).unwrap();
+			let mut buf = vec![0u8; 64];
+			let n = s.read(&mut buf, 3).unwrap();
+			buf.truncate(n);
+			Ok(buf)
+		})
+	}
+
+	fn query_str(&mut self, opcode: u32) -> Result<String> {
+		let x = self.query(opcode)?;
+		let s = String::from_utf8_lossy(&x).into_owned();
+		Ok(s)
+	}
+
+	pub fn get_ip(&mut self) -> Result<String> {
+		self.query_str(0x10ff20f0)
+	}
+
+	pub fn get_firmware(&mut self) -> Result<String> {
+		self.query_str(0x10ff20f1)
+	}
+
+	pub fn get_serial(&mut self) -> Result<String> {
+		self.query_str(0x10ff20f2)
+	}
+
+	pub fn get_hardware(&mut self) -> Result<String> {
+		self.query_str(0x10ff3010)
+	}
+
+	pub fn get_name(&mut self) -> Result<String> {
+		self.query_str(0x10ff3011)
+	}
+
+	pub fn get_mac(&mut self) -> Result<[u8; 6]> {
+		let mac = self.query(0x10ff3012)?;
+		let mut buf = [0u8; 6];
+		buf.copy_from_slice(&mac[0..6]);
+		Ok(buf)
+	}
+
+	pub fn get_battery(&mut self) -> Result<u8> {
+		let x = self.query(0x10ff50f1)?;
+		assert_eq!(x.len(), 2);
+		Ok(x[1])
+	}
+
+	pub fn set_concentration(&mut self, c: u8) -> Result<()> {
+		let c = c.min(2);
+		self.run(|s| {
+			let buf = [0x10, 0xff, 0x10, 0x00, c];
+			s.write(&buf, 1)?;
+			Ok(())
+		})
+	}
+
 	pub fn print(&mut self, doc: &Document, extra: bool) -> Result<()> {
 		let mut packet = vec![
-			0x10, 0xff, 0xfe, 0x01,
-			0x1b, 0x40, 0x00, 0x1b,
-			0x4a, 0x60,
+			0x10, 0xff, 0xfe, 0x01, // reset
+			0x1b, 0x40, 0x00, // no idea
+			0x1b, 0x4a, 0x60, // print break of len 0x60
 		];
 
 		let chunk_width = doc.width() / 8;
@@ -162,7 +226,8 @@ impl Printer {
 		assert_eq!(chunk_width, 48);
 
 		let page_header = &[
-			0x1d, 0x76, 0x30, 0x00, 0x30, 0x00,
+			0x1d, 0x76, 0x30, 0x00, // print command
+			0x30, 0x00, // big endian 0x0030 row size
 		];
 
 		// Group the pixels into pages, because that's how the Windows driver does it.
@@ -187,7 +252,26 @@ impl Printer {
 		
 		self.run(|s| {
 			s.write(&packet, 30)?;
-			s.write(&[0x10, 0xff, 0xfe, 0x45], 1)?;
+			s.write(&[0x10, 0xff, 0xfe, 0x45], 1)?; // no idea
+			Ok(())
+		})
+	}
+
+	fn reset(&mut self) -> Result<()> {
+		let buf = [
+			0x10, 0xff, 0xfe, 0x01,
+			0x00, 0x00, 0x00, 0x00,
+			0x00, 0x00, 0x00, 0x00,
+			0x00, 0x00, 0x00, 0x00,
+		];
+		self.write(&buf, 1)?;
+		Ok(())
+	}
+
+	pub fn print_ascii(&mut self, text: &str) -> Result<()> {
+		self.run(|s| {
+			s.reset()?;
+			s.write(text.as_bytes(), 30)?;
 			Ok(())
 		})
 	}
