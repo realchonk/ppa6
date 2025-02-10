@@ -2,6 +2,7 @@ use std::{io::{Cursor, Read}, path::{Path, PathBuf}};
 use anyhow::Result;
 use clap::Parser;
 use clap_num::maybe_hex;
+use clap_verbosity::Verbosity;
 use cosmic_text::{Attrs, Buffer, Color, FontSystem, Metrics, Shaping, SwashCache};
 use image::{imageops::{dither, ColorMap, FilterType}, DynamicImage, GrayImage, ImageFormat, ImageReader, Luma, RgbImage};
 use ppa6::{usb_context, Document, Printer};
@@ -59,6 +60,9 @@ struct Cli {
 	/// Adjust constrast, positive values increase contrast, negative values decrease contrast
 	#[arg(short, long, default_value_t = 0.0)]
 	contrast: f32,
+
+	#[command(flatten)]
+	verbose: Verbosity,
 }
 
 struct BlackWhiteMap(u8);
@@ -182,6 +186,9 @@ fn text(cli: &Cli, data: &[u8]) -> Result<GrayImage> {
 
 fn main() -> Result<()> {
 	let cli = Cli::parse();
+	env_logger::builder()
+		.filter_level(cli.verbose.log_level_filter())
+		.init();
 
 	let data = if cli.file == Path::new("-") {
 		let mut data = Vec::new();
@@ -227,6 +234,15 @@ fn main() -> Result<()> {
 	let ctx = usb_context()?;
 	let mut printer = Printer::find(&ctx)?;
 
+	log::info!("IP: {}", printer.get_ip()?);
+	log::info!("Firmware: {}", printer.get_firmware()?);
+	log::info!("Serial: {}", printer.get_serial()?);
+	log::info!("Hardware: {}", printer.get_hardware()?);
+	log::info!("Name: {}", printer.get_name()?);
+	log::info!("MAC: {:x?}", printer.get_mac()?);
+	log::info!("Battery: {}%", printer.get_battery()?);
+
+	
 	for i in 0..cli.num {
 		printer.print(&doc, cli.feed && i == (cli.num - 1))?;
 	}
