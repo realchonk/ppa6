@@ -71,34 +71,34 @@ impl Printer {
 		let _ = handle.set_auto_detach_kernel_driver(true);
 
 		let dd = dev.device_descriptor()?;
-		log::trace!("USB device descriptor = {dd:#?}");
+		log::debug!("USB device descriptor = {dd:#?}");
 		if let Ok(s) = handle.read_manufacturer_string_ascii(&dd) {
-			log::debug!("USB Vendor: {s}");
+			log::info!("USB Vendor: {s}");
 		}
 		if let Ok(s) = handle.read_product_string_ascii(&dd) {
-			log::debug!("USB Product: {s}");
+			log::info!("USB Product: {s}");
 		}
 		if let Ok(s) = handle.read_serial_number_string_ascii(&dd) {
-			log::debug!("USB Serial: {s}");
+			log::info!("USB Serial: {s}");
 		}
 
 		// PeriPage A6 has only one config.
 		debug_assert_eq!(dd.num_configurations(), 1);
 
 		let cd = dev.config_descriptor(0)?;
-		log::trace!("USB configuration descriptor 0: {cd:#?}");
+		log::debug!("USB configuration descriptor 0: {cd:#?}");
 
 		// PeriPage A6 has only one interface.
 		debug_assert_eq!(cd.num_interfaces(), 1);
 
 		let int = cd.interfaces().next().unwrap();
 		let id = int.descriptors().next().unwrap();
-		log::trace!("USB interface descriptor 0 for configuration 0: {id:#?}");
+		log::debug!("USB interface descriptor 0 for configuration 0: {id:#?}");
 		if let Some(sid) = id.description_string_index() {
-			log::trace!("Interface: {}", handle.read_string_descriptor_ascii(sid)?);
+			log::debug!("Interface: {}", handle.read_string_descriptor_ascii(sid)?);
 		}
 
-		log::debug!("Is kernel driver active: {:?}", handle.kernel_driver_active(0));
+		log::info!("Is kernel driver active: {:?}", handle.kernel_driver_active(0));
 
 		debug_assert_eq!(id.class_code(), 7); // Printer
 		debug_assert_eq!(id.sub_class_code(), 1); // Printer
@@ -110,8 +110,8 @@ impl Printer {
 		let epd1 = endps.next().unwrap();
 		debug_assert!(endps.next().is_none());
 
-		log::trace!("USB endpoint descriptor 0: {epd0:#?}");
-		log::trace!("USB endpoint descriptor 1: {epd1:#?}");
+		log::debug!("USB endpoint descriptor 0: {epd0:#?}");
+		log::debug!("USB endpoint descriptor 1: {epd1:#?}");
 
 		debug_assert_eq!(epd0.address(), 129); // IN (128) + 1
 		assert_eq!(epd0.direction(), Direction::In);
@@ -142,6 +142,7 @@ impl Printer {
 	/// Write data to the USB device.
 	/// NOTE: This function must be run inside of `Self::run()`
 	fn write(&mut self, buf: &[u8], timeout: u64) -> Result<()> {
+		log::trace!("write({buf:x?}, {timeout});");
 		self.handle.write_bulk(self.epout, buf, Duration::from_secs(timeout))?;
 		Ok(())
 	}
