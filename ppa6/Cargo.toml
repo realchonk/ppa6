@@ -3,7 +3,12 @@ name = "ppa6"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+default = ["usb"]
+usb = ["dep:rusb"]
+
 [dependencies]
+anyhow = "1.0.95"
 log = "0.4.25"
-rusb = "0.9.4"
+rusb = { version = "0.9.4", optional = true }
 thiserror = "2.0.11"

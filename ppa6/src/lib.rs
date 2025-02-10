@@ -1,292 +1,276 @@
-// Very helpful doc for USB: https://www.beyondlogic.org/usbnutshell/usb1.shtml
-use std::{iter::repeat_n, time::Duration};
+use std::{fmt::{self, Debug, Display, Formatter}, time::Duration};
 
-use rusb::{Direction, TransferType, UsbContext};
-use thiserror::Error;
+use anyhow::{bail, Context, Result};
 
-pub use crate::doc::{Document, DocumentError};
-pub use rusb as usb;
-pub use crate::usb::Context;
-
-/// USB vendor ID of the PeriPage A6.
-pub const VENDOR_ID: u16 = 0x09c5;
-
-/// USB product ID of the PeriPage A6.
-pub const PRODUCT_ID: u16 = 0x0200;
-
-#[derive(Debug, Error)]
-pub enum Error {
-	#[error("USB problem")]
-	Usb(#[from] rusb::Error),
-
-	#[error("failed to claim the USB device")]
-	Claim(#[source] rusb::Error),
-	
-	#[error("no PeriPage A6 found")]
-	NoPrinter,
+macro_rules! backends {
+	[$($(# [$($m:tt)*])? $mod:ident :: $name:ident),* $(,)?] => {
+		$(
+			$(# [$($m)*])*
+			mod $mod;
+			$(# [$($m)*])*
+			pub use crate::$mod::$name;
+		)*
+	};
 }
 
-pub type Device = rusb::Device<Context>;
-pub type DeviceHandle = rusb::DeviceHandle<Context>;
-pub type Result<T> = core::result::Result<T, Error>;
+backends! [
+	#[cfg(feature = "usb")]
+	usb::UsbBackend,
+];
 
-mod doc;
 
+/// Printing backend.
+pub trait Backend {
+	/// Send data to the printer.
+	/// TODO: return number of bytes sent
+	fn send(&mut self, buf: &[u8], timeout: Duration) -> Result<()>;
+
+	/// Receive at most `buf.len()` bytes of data from the printer.
+	///
+	/// # Return value
+	/// This functions the number of bytes received from the printer.
+	fn recv(&mut self, buf: &mut [u8], timeout: Duration) -> Result<usize>;
+}
+
+/// MAC Address, see [`Printer::get_mac()`].
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct MacAddr(pub [u8; 6]);
+
+/// PeriPage A6 printer.
 pub struct Printer {
-	handle: DeviceHandle,
-	epin: u8,
-	epout: u8,
+	backend: Box<dyn Backend>,
 }
 
 impl Printer {
-	/// List all available printers.
-	pub fn list(ctx: &Context) -> Result<Vec<Device>> {
-		let devs = ctx
-			.devices()?
-			.iter()
-			.filter(|dev| {
-				let Ok(desc) = dev.device_descriptor() else {
-					log::warn!("cannot get device descriptor for Bus {dev:?}");
-					return false
-				};
-
-				desc.vendor_id() == VENDOR_ID && desc.product_id() == PRODUCT_ID
-			})
-			.collect();
-		Ok(devs)
-	}
-	
-	/// Find the first printer and open it.
-	pub fn find(ctx: &Context) -> Result<Self> {
-		match Self::list(ctx)?.first() {
-			Some(dev) => Self::open(dev.open()?),
-			None => Err(Error::NoPrinter),
+	/// Construct a new printer using `backend` as it's printing [`Backend`].
+	pub fn new(backend: impl Backend + 'static) -> Self {
+		Self {
+			backend: Box::new(backend),
 		}
 	}
-	/// Open a specific printer.
-	pub fn open(handle: DeviceHandle) -> Result<Self> {
-		let dev = handle.device();
 
-		// automatically steal the USB device from the kernel
-		let _ = handle.set_auto_detach_kernel_driver(true);
-
-		let dd = dev.device_descriptor()?;
-		log::debug!("USB device descriptor = {dd:#?}");
-		if let Ok(s) = handle.read_manufacturer_string_ascii(&dd) {
-			log::info!("USB Vendor: {s}");
-		}
-		if let Ok(s) = handle.read_product_string_ascii(&dd) {
-			log::info!("USB Product: {s}");
-		}
-		if let Ok(s) = handle.read_serial_number_string_ascii(&dd) {
-			log::info!("USB Serial: {s}");
-		}
-
-		// PeriPage A6 has only one config.
-		debug_assert_eq!(dd.num_configurations(), 1);
-
-		let cd = dev.config_descriptor(0)?;
-		log::debug!("USB configuration descriptor 0: {cd:#?}");
-
-		// PeriPage A6 has only one interface.
-		debug_assert_eq!(cd.num_interfaces(), 1);
-
-		let int = cd.interfaces().next().unwrap();
-		let id = int.descriptors().next().unwrap();
-		log::debug!("USB interface descriptor 0 for configuration 0: {id:#?}");
-		if let Some(sid) = id.description_string_index() {
-			log::debug!("Interface: {}", handle.read_string_descriptor_ascii(sid)?);
-		}
-
-		log::info!("Is kernel driver active: {:?}", handle.kernel_driver_active(0));
-
-		debug_assert_eq!(id.class_code(), 7); // Printer
-		debug_assert_eq!(id.sub_class_code(), 1); // Printer
-		debug_assert_eq!(id.protocol_code(), 2); // Bi-directional
-		assert_eq!(id.num_endpoints(), 2); 
-
-		let mut endps = id.endpoint_descriptors();
-		let epd0 = endps.next().unwrap();
-		let epd1 = endps.next().unwrap();
-		debug_assert!(endps.next().is_none());
-
-		log::debug!("USB endpoint descriptor 0: {epd0:#?}");
-		log::debug!("USB endpoint descriptor 1: {epd1:#?}");
-
-		debug_assert_eq!(epd0.address(), 129); // IN (128) + 1
-		assert_eq!(epd0.direction(), Direction::In);
-		assert_eq!(epd0.transfer_type(), TransferType::Bulk);
-
-		debug_assert_eq!(epd1.address(), 2); // OUT (0) + 2
-		assert_eq!(epd1.direction(), Direction::Out);
-		assert_eq!(epd1.transfer_type(), TransferType::Bulk);
-
-		Ok(Self {
-			handle,
-			epin: epd0.address(),
-			epout: epd1.address(),
-		})
-	}
-
-	/// Run action `f` while the interface is claimed.
-	fn run<T>(&mut self, f: impl FnOnce(&mut Self) -> Result<T>) -> Result<T> {
-		self.handle.claim_interface(0)
-			.map_err(|e| Error::Claim(e))?;
-		let x = f(self);
-		if let Err(e) = self.handle.release_interface(0) {
-			log::error!("failed to unclaim device: {e}");
-		}
-		x
-	}
-
-	/// Write data to the USB device.
-	/// NOTE: This function must be run inside of `Self::run()`
-	fn write(&mut self, buf: &[u8], timeout: u64) -> Result<()> {
-		log::trace!("write({buf:x?}, {timeout});");
-		self.handle.write_bulk(self.epout, buf, Duration::from_secs(timeout))?;
-		Ok(())
-	}
-
-	fn read(&mut self, buf: &mut [u8], timeout: u64) -> Result<usize> {
-		let n = self.handle.read_bulk(self.epin, buf, Duration::from_secs(timeout))?;
-		Ok(n)
-	}
-
-	fn query(&mut self, opcode: u32) -> Result<Vec<u8>> {
-		self.run(|s| {
-			let opcode = u32::to_be_bytes(opcode);
-			s.write(&opcode, 1).unwrap();
-			let mut buf = vec![0u8; 64];
-			let n = s.read(&mut buf, 3).unwrap();
-			buf.truncate(n);
-			Ok(buf)
-		})
-	}
-
-	fn query_str(&mut self, opcode: u32) -> Result<String> {
-		let x = self.query(opcode)?;
-		let s = String::from_utf8_lossy(&x).into_owned();
-		Ok(s)
-	}
-
-	pub fn get_ip(&mut self) -> Result<String> {
-		self.query_str(0x10ff20f0)
-	}
-
-	pub fn get_firmware(&mut self) -> Result<String> {
-		self.query_str(0x10ff20f1)
-	}
-
-	pub fn get_serial(&mut self) -> Result<String> {
-		self.query_str(0x10ff20f2)
-	}
-
-	pub fn get_hardware(&mut self) -> Result<String> {
-		self.query_str(0x10ff3010)
-	}
-
-	pub fn get_name(&mut self) -> Result<String> {
-		self.query_str(0x10ff3011)
-	}
-
-	pub fn get_mac(&mut self) -> Result<[u8; 6]> {
-		let mac = self.query(0x10ff3012)?;
-		let mut buf = [0u8; 6];
-		buf.copy_from_slice(&mac[0..6]);
-		Ok(buf)
-	}
-
-	pub fn get_battery(&mut self) -> Result<u8> {
-		let x = self.query(0x10ff50f1)?;
-		assert_eq!(x.len(), 2);
-		Ok(x[1])
-	}
-
-	pub fn set_concentration(&mut self, c: u8) -> Result<()> {
-		let c = c.min(2);
-		self.run(|s| {
-			let buf = [0x10, 0xff, 0x10, 0x00, c];
-			s.write(&buf, 1)?;
-			Ok(())
-		})
-	}
-
-	pub fn print(&mut self, doc: &Document, extra: bool) -> Result<()> {
-		let mut packet = vec![
-			0x10, 0xff, 0xfe, 0x01, // reset
-			0x1b, 0x40, 0x00, // no idea
-			0x1b, 0x4a, 0x60, // print break of len 0x60
-		];
-
-		let chunk_width = doc.width() / 8;
-		let chunk_height  = 24; // This number was derived from USB traffic.
-		let chunk_size = chunk_width * chunk_height;
-
-		// TODO: allow pages smaller than 384px
-		assert_eq!(chunk_width, 48);
-
-		let page_header = &[
-			0x1d, 0x76, 0x30, 0x00, // print command
-			0x30, 0x00, // big endian 0x0030 row size
-		];
-
-		// Group the pixels into pages, because that's how the Windows driver does it.
-		doc
-			.pixels()
-			.chunks(chunk_size)
-			.for_each(|chunk| {
-				packet.extend_from_slice(page_header);
-				packet.extend_from_slice(&u16::to_le_bytes(chunk_height as u16));
-				packet.extend_from_slice(chunk);
-				if chunk.len() < chunk_size {
-					packet.extend(repeat_n(0u8, chunk_size - chunk.len()));
-				}
-			});
-
-		if extra {
-			let height = 3 * 24;
-			packet.extend_from_slice(page_header);
-			packet.extend_from_slice(&u16::to_le_bytes(height));
-			packet.extend(repeat_n(0u8, 48 * height as usize));
+	/// Find any printer, connected using any backend.
+	pub fn find() -> Result<Self> {
+		#[cfg(feature = "usb")] {
+			match crate::usb::UsbBackend::list() {
+				Ok(devs) => {
+					if let Some(dev) = devs.first() {
+						let backend = UsbBackend::open(dev)?;
+						return Ok(Self::new(backend));
+					}
+				},
+				Err(e) => log::error!("cannot get list of usb devices: {e}"),
+			}
 		}
 		
-		self.run(|s| {
-			s.write(&packet, 30)?;
-			s.write(&[0x10, 0xff, 0xfe, 0x45], 1)?; // no idea
-			Ok(())
-		})
+		bail!("no printer found");
 	}
 
-	fn reset(&mut self) -> Result<()> {
+	fn send(&mut self, buf: &[u8], timeout: u64) -> Result<()> {
+		log::trace!("send({}{buf:x?}, {timeout}s);", buf.len());
+		self.backend.send(buf, Duration::from_secs(timeout))
+	}
+	fn recv(&mut self, buf: &mut [u8], timeout: u64) -> Result<usize> {
+		let n = self.backend.recv(buf, Duration::from_secs(timeout))?;
+		log::trace!("recv({}, {timeout}s): {n}{:x?}", buf.len(), &buf[0..n]);
+		Ok(n)
+	}
+	fn query(&mut self, cmd: &[u8]) -> Result<Vec<u8>> {
+		self.send(cmd, 3).context("failed to send request")?;
+		let mut buf = vec![0u8; 1024];
+		let n = self.recv(&mut buf, 3).context("failed receive response")?;
+		buf.truncate(n);
+		Ok(buf)
+	}
+	fn query_string(&mut self, cmd: &[u8]) -> Result<String> {
+		let buf = self.query(cmd)?;
+		let s = String::from_utf8_lossy(&buf);
+		Ok(s.into_owned())
+	}
+
+	/// Get printer's "IP" string.
+	pub fn get_ip(&mut self) -> Result<String> {
+		self.query_string(&[0x10, 0xff, 0x20, 0xf0])
+	}
+
+	/// Get printer's firmware version.
+	pub fn get_firmware_ver(&mut self) -> Result<String> {
+		self.query_string(&[0x10, 0xff, 0x20, 0xf1])
+	}
+
+	/// Get printer's serial number.
+	pub fn get_serial(&mut self) -> Result<String> {
+		self.query_string(&[0x10, 0xff, 0x20, 0xf2])
+	}
+
+	/// Get printer's hardware version.
+	pub fn get_hardware_ver(&mut self) -> Result<String> {
+		self.query_string(&[0x10, 0xff, 0x30, 0x10])
+	}
+
+	/// Get printer's name.
+	pub fn get_name(&mut self) -> Result<String> {
+		self.query_string(&[0x10, 0xff, 0x30, 0x11])
+	}
+	
+	/// Get printer's MAC address.
+	/// TODO: Return a MacAddr struct i
+	pub fn get_mac(&mut self) -> Result<MacAddr> {
+		let buf = self.query(&[0x10, 0xff, 0x30, 0x12])?;
+		// for some reason the printer sends the MAC address twice
+		if buf.len() < 6 {
+			bail!("invalid MAC address response, got {} bytes: {:x?}", buf.len(), &buf);
+		}
+		let mut mac = [0u8; 6];
+		mac.copy_from_slice(&buf[0..6]);
+		Ok(MacAddr(mac))
+	}
+
+	/// Get printer's battery state.
+	pub fn get_battery(&mut self) -> Result<u8> {
+		let buf = self.query(&[0x10, 0xff, 0x50, 0xf1])?;
+		if buf.len() != 2 {
+			bail!("invalid battery response");
+		}
+		Ok(buf[1])
+	}
+
+	/// Set printing concentration, valid values are between `0..=2`.
+	pub fn set_concentration(&mut self, c: u8) -> Result<()> {
+		if c > 2 {
+			bail!("invalid concentration: {c}");
+		}
+
+		self.send(&[0x10, 0xff, 0x10, 0x00, c], 1)
+	}
+
+	/// Reset the printer.
+	/// This command has to be sent, before printing can be done.
+	pub fn reset(&mut self) -> Result<()> {
 		let buf = [
 			0x10, 0xff, 0xfe, 0x01,
 			0x00, 0x00, 0x00, 0x00,
 			0x00, 0x00, 0x00, 0x00,
 			0x00, 0x00, 0x00, 0x00,
 		];
-		self.write(&buf, 1)?;
+		self.send(&buf, 3)?;
+		let mut buf = [0u8; 128];
+		let _ = self.recv(&mut buf, 1);
 		Ok(())
 	}
 
-	pub fn print_ascii(&mut self, text: &str) -> Result<()> {
-		self.run(|s| {
-			s.reset()?;
-			s.write(text.as_bytes(), 30)?;
-			Ok(())
-		})
+	/// Print ASCII text.
+	/// Please don't use this, better use a font rasterizer, like [cosmic-text](https://docs.rs/cosmic-text).
+	///
+	/// # Printer Bugs (PeriPage A6)
+	/// - Only ASCII, no Unicode
+	/// - No ASCII escape sequences, except '\n' (line feed)
+	/// - Line wrapping is very buggy, sometimes it works, sometimes it discards the rest of the line.
+	/// - No font size/weight settings
+	pub fn print_text(&mut self, text: &str) -> Result<()> {
+		let text: Vec<u8> = text
+			.chars()
+			.filter(|ch| matches!(ch, '\n' | '\x20'..='\x7f'))
+			.map(|ch| ch as u8)
+			.collect();
+
+		self.send(&text, 30)?;
+		Ok(())
 	}
 
-	pub fn handle(&mut self) -> &DeviceHandle {
-		&mut self.handle
+	/// Print raw pixels.
+	///
+	/// # Overheating
+	/// The printer can overheat, if too much black is being printed at once,
+	/// therefore it's better to use the [`Printer::print_image_chunked()`] function instead.
+	///
+	/// # Printing Limitations
+	/// While the printer has a density of 203dpi,
+	/// printing very small things and thin lines should be avoided,
+	/// as the printer is simply not precise enough.
+	///
+	/// # "Concentration"
+	/// The printing concentration can be adjusted with [`Printer::set_concentration()`],
+	/// to make the output brighter or darker.
+	///
+	/// # Format
+	/// TODO: describe pixel format:
+	/// - monochrome
+	/// - 0=white, 1=black
+	/// - MSB: left, LSB: right
+	/// - must be multiples of `width/8` bytes
+	/// - must not be longer than `65535` rows
+	/// - due to accuracy constraints, printing single pixels should be avoided
+	///
+	/// # Notes
+	/// Printing gray scale pictures is possible,
+	/// by using [dithering](https://en.wikipedia.org/wiki/Dithering) to convert them to monochrome first.
+	/// Similarly, color images must be first converted to gray scale.
+	/// The [image](https://docs.rs/image/latest/image/) crate can be used, to do the conversions.
+	pub fn print_image(&mut self, pixels: &[u8], width: u16) -> Result<()> {
+		if width == 0 || width % 8 != 0 {
+			bail!("width must be non-zero and divisible by 8");
+		}
+		
+		let n = pixels.len() * 8;
+		let w = width as usize;
+		let h = n / w;
+
+		if h > 0xff {
+			bail!("document too long");
+		}
+
+		if pixels.len() != (w * h / 8) {
+			bail!("invalid length of pixels: {}", pixels.len());
+		}
+
+		let rs = w / 8;
+
+		let mut packet = vec![
+			0x1d, 0x76, 0x30,
+			(rs >> 8) as u8, (rs & 0xff) as u8,
+			0x00, h as u8,
+		];
+		packet.extend_from_slice(pixels);
+		self.send(&packet, 60)?;
+
+		// no idea what this does, but the Windows driver sends this after every print.
+		self.send(&[0x10, 0xff, 0xfe, 0x45], 1)?;
+		Ok(())
 	}
-	pub fn endpoint_in(&self) -> u8 {
-		self.epin
+
+	/// Just like [`Printer::print_image()`], but breaks the pixels into rows of `chunk_height`.
+	/// This may be needed, to prevent the printer from overheating, while printing a long document.
+	pub fn print_image_chunked_ext(&mut self, pixels: &[u8], width: u16, chunk_height: u16, delay: Duration) -> Result<()> {
+		pixels
+			.chunks(width as usize * chunk_height as usize / 8)
+			.try_for_each(|chunk| {
+				self.print_image(chunk, width)?;
+				std::thread::sleep(delay);
+				Ok(())
+			})
 	}
-	pub fn endpoint_out(&self) -> u8 {
-		self.epout
+
+	pub fn print_image_chunked(&mut self, pixels: &[u8], width: u16) -> Result<()> {
+		self.print_image_chunked_ext(pixels, width, 24, Duration::from_millis(50))
+	}
+
+	/// Push out `num` rows of paper.
+	pub fn push(&mut self, num: u8) -> Result<()> {
+		self.send(&[0x1b, 0x4a, num], 5)?;
+		Ok(())
 	}
 }
 
-pub fn usb_context() -> usb::Result<usb::Context> {
-	Context::new()
+impl Display for MacAddr {
+	fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+		let [x0, x1, x2, x3, x4, x5] = self.0;
+		write!(f, "{x0:02x}:{x1:02x}:{x2:02x}:{x3:02x}:{x4:02x}:{x5:02x}")
+	}
+}
+
+impl Debug for MacAddr {
+	fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+		<Self as Display>::fmt(self, f)
+	}
 }

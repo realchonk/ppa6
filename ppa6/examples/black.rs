@@ -1,10 +1,11 @@
-use ppa6::{Document, Printer};
+use ppa6::Printer;
 
 fn main() {
-	let ctx = ppa6::usb_context().unwrap();
-	let mut printer = Printer::find(&ctx).unwrap();
+	let mut printer = Printer::find().expect("no printer found");
+	printer.reset().expect("failed to reset printer");
+	let pixels = vec![0xffu8; 384 * 384 / 8];
+	printer
+		.print_image_chunked(&pixels, 384)
+		.expect("failed to print black image");
 
-	let pixels = vec![0xffu8; 48 * 384];
-	let doc = Document::new(pixels).unwrap();
-	printer.print(&doc, true).unwrap();
 }
