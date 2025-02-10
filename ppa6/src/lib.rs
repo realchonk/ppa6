@@ -155,7 +155,7 @@ impl Printer {
 		];
 		self.send(&buf, 3)?;
 		let mut buf = [0u8; 128];
-		let _ = self.recv(&mut buf, 1);
+		let _ = self.backend.recv(&mut buf, Duration::from_secs(1));
 		Ok(())
 	}
 
@@ -229,7 +229,7 @@ impl Printer {
 		let mut packet = vec![
 			0x1d, 0x76, 0x30,
 			(rs >> 8) as u8, (rs & 0xff) as u8,
-			0x00, h as u8,
+			0x00, h as u8, 0x00,
 		];
 		packet.extend_from_slice(pixels);
 		self.send(&packet, 60)?;
