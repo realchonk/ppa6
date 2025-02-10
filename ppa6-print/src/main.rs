@@ -51,6 +51,14 @@ struct Cli {
 	/// Line Height Factor. This gets multiplied with the font size to get the line height.
 	#[arg(short, long, default_value_t = 1.0)]
 	line_height: f32,
+
+	/// Adjust brightness, positive values increase brightness, negative values decrease brightness
+	#[arg(short, long, default_value_t = 0)]
+	brighten: i32,
+
+	/// Adjust constrast, positive values increase contrast, negative values decrease contrast
+	#[arg(short, long, default_value_t = 0.0)]
+	contrast: f32,
 }
 
 struct BlackWhiteMap(u8);
@@ -114,7 +122,10 @@ fn picture(cli: &Cli, data: &[u8]) -> Result<GrayImage> {
 		.with_guessed_format()?
 		.decode()?
 		.into_luma8();
-	let mut img = resize(rotate(img, cli.rotate));
+	let mut img = DynamicImage::ImageLuma8(resize(rotate(img, cli.rotate)))
+		.brighten(cli.brighten)
+		.adjust_contrast(cli.contrast)
+		.into_luma8();
 	assert_eq!(img.width(), 384);
 	dither(&mut img, &BlackWhiteMap(cli.threshold));
 	Ok(img)
