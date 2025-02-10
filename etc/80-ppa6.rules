@@ -1,0 +1,2 @@
+# udev rules for PeriPage A6
+SUBSYSTEM=="usb", ATTR{idVendor}=="09c5", ATTR{idProduct}=="0200", MODE="0666"
