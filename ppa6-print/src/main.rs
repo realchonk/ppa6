@@ -5,8 +5,8 @@ use clap_num::maybe_hex;
 use clap_verbosity::Verbosity;
 use cosmic_text::{Attrs, Buffer, Color, FontSystem, Metrics, Shaping, SwashCache};
 use image::{imageops::{dither, ColorMap, FilterType}, DynamicImage, GrayImage, ImageFormat, ImageReader, Luma, RgbImage};
-use ppa6::{usb_context, Document, Printer};
-use itertools::Itertools;
+use ppa6::Printer;
+use rayon::prelude::*;
 
 #[derive(Parser)]
 struct Cli {
@@ -122,15 +122,32 @@ fn rotate(img: GrayImage, deg: usize) -> GrayImage {
 }
 
 fn picture(cli: &Cli, data: &[u8]) -> Result<GrayImage> {
+	log::trace!("parsing...");
 	let img = ImageReader::new(Cursor::new(data))
 		.with_guessed_format()?
 		.decode()?
 		.into_luma8();
-	let mut img = DynamicImage::ImageLuma8(resize(rotate(img, cli.rotate)))
-		.brighten(cli.brighten)
-		.adjust_contrast(cli.contrast)
-		.into_luma8();
+
+	log::trace!("rotating...");
+	let img = rotate(img, cli.rotate);
+	
+	log::trace!("resizing...");
+	let mut img = DynamicImage::ImageLuma8(resize(img));
+
+	if cli.brighten != 0 {
+		log::trace!("brightening...");
+		img = img.brighten(cli.brighten);
+	}
+
+	if cli.contrast != 0.0 {
+		log::trace!("adjusting contrast...");
+		img = img.adjust_contrast(cli.contrast);
+	}
+
+	let mut img = img.into_luma8();
 	assert_eq!(img.width(), 384);
+
+	log::trace!("dithering...");
 	dither(&mut img, &BlackWhiteMap(cli.threshold));
 	Ok(img)
 }
@@ -211,17 +228,18 @@ fn main() -> Result<()> {
 		return Ok(());
 	}
 
+	log::trace!("mapping...");
 	let pixels = img
-		.pixels()
+		.par_pixels()
 		.map(|c| (c.0[0] < cli.threshold) ^ cli.invert)
 		.chunks(8)
-		.into_iter()
 		.map(|chunk| {
 			chunk
+				.iter()
 				.enumerate()
 				.fold(0u8, |mut acc, (i, c)|  {
 					assert!(i < 8);
-					if c {
+					if *c {
 						acc |= 128 >> i;
 					}
 					acc
@@ -229,22 +247,23 @@ fn main() -> Result<()> {
 		})
 		.collect::<Vec<u8>>();
 
-	let doc = Document::new(pixels)?;
-
-	let ctx = usb_context()?;
-	let mut printer = Printer::find(&ctx)?;
-
+	let mut printer = Printer::find()?;
+	printer.reset()?;
 	log::info!("IP: {}", printer.get_ip()?);
-	log::info!("Firmware: {}", printer.get_firmware()?);
+	log::info!("Firmware: {}", printer.get_firmware_ver()?);
 	log::info!("Serial: {}", printer.get_serial()?);
-	log::info!("Hardware: {}", printer.get_hardware()?);
+	log::info!("Hardware: {}", printer.get_hardware_ver()?);
 	log::info!("Name: {}", printer.get_name()?);
 	log::info!("MAC: {:x?}", printer.get_mac()?);
 	log::info!("Battery: {}%", printer.get_battery()?);
 
 	
-	for i in 0..cli.num {
-		printer.print(&doc, cli.feed && i == (cli.num - 1))?;
+	for _ in 0..cli.num {
+		printer.print_image_chunked(&pixels, 384)?;
+	}
+
+	if cli.feed {
+		printer.push(0x60)?;
 	}
 
 	Ok(())

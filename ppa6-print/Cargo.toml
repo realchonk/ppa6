@@ -9,9 +9,9 @@ cosmic-text = "0.12.1"
 clap = { version = "4.5.28", features = ["derive"] }
 clap-num = "1.2.0"
 image = "0.25.5"
-itertools = "0.14.0"
 open = "5.3.2"
 ppa6.workspace = true
 env_logger = "0.11.6"
 clap-verbosity = "2.1.0"
 log = "0.4.25"
+rayon = "1.10.0"
