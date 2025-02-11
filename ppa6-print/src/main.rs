@@ -1,6 +1,6 @@
 use std::{io::{Cursor, Read}, path::{Path, PathBuf}};
 use anyhow::Result;
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use clap_num::maybe_hex;
 use clap_verbosity::Verbosity;
 use cosmic_text::{Attrs, Buffer, Color, FontSystem, Metrics, Shaping, SwashCache};
@@ -67,6 +67,55 @@ struct Cli {
 
 	#[command(flatten)]
 	verbose: Verbosity,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+	/// Print raw pre-rasterized images.
+	Raw {
+		/// Width of the image.
+		#[arg(short, long, default_value_t = 384)]
+		width: u16,
+
+		/// Path to the file.
+		file: Option<PathBuf>,
+	},
+	
+	/// Print pictures.
+	Image {
+		/// Threshold for dithering.
+		#[arg(short = 'T', long, default_value_t = 0x80, value_parser = maybe_hex::<u8>)]
+		threshold: u8,
+
+		/// Adjust brightness, positive values increase brightness, negative values decrease brightness.
+		#[arg(short, long, default_value_t = 0)]
+		brighten: i32,
+
+		/// Adjust contrast, positive values increase contrast, negative values decrease contrast
+		#[arg(short, long, default_value_t = 0.0)]
+		contrast: f32,
+
+		/// Path to the image.
+		file: Option<PathBuf>,
+	},
+
+	/// Print text.
+	Text {
+		/// Font size. Anything below 12 starts to be difficult to read.
+		#[arg(short = 'S', long, default_value_t = 18.0)]
+		size: f32,
+
+		/// Font weight. Good numbers are 600 and 800.
+		#[arg(short, long, default_value_t = 800)]
+		weight: u16,
+
+		/// Line height factor. This gets multiplied with the font size to get the line height.
+		#[arg(short, long, default_value_t = 1.0)]
+		height: f32,
+
+		/// Path to the text file.
+		file: Option<PathBuf>,
+	},
 }
 
 struct BlackWhiteMap(u8);
