@@ -251,7 +251,10 @@ fn main() -> Result<()> {
 		})
 		.collect::<Vec<u8>>();
 
+	log::trace!("searching for printer...");
 	let mut printer = Printer::find()?;
+
+	log::trace!("resetting printer...");
 	printer.reset()?;
 	log::info!("IP: {}", printer.get_ip()?);
 	log::info!("Firmware: {}", printer.get_firmware_ver()?);
@@ -262,14 +265,17 @@ fn main() -> Result<()> {
 	log::info!("Battery: {}%", printer.get_battery()?);
 
 	if let Some(c) = cli.concentration {
+		log::trace!("setting printer concentration to {c}...");
 		printer.set_concentration(c)?;
 	}
 	
 	for _ in 0..cli.num {
+		log::trace!("printing chunk {i}...");
 		printer.print_image_chunked(&pixels, 384)?;
 	}
 
 	if cli.feed {
+		log::trace!("feeding...");
 		printer.push(0x60)?;
 	}
 
