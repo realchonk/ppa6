@@ -269,7 +269,7 @@ fn main() -> Result<()> {
 		printer.set_concentration(c)?;
 	}
 	
-	for _ in 0..cli.num {
+	for i in 0..cli.num {
 		log::trace!("printing chunk {i}...");
 		printer.print_image_chunked(&pixels, 384)?;
 	}
