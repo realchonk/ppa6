@@ -5,13 +5,17 @@ use clap_num::maybe_hex;
 use clap_verbosity::Verbosity;
 use cosmic_text::{Attrs, Buffer, Color, FontSystem, Metrics, Shaping, SwashCache};
 use image::{imageops::{dither, ColorMap, FilterType}, DynamicImage, GrayImage, ImageFormat, ImageReader, Luma, RgbImage};
-use ppa6::Printer;
+use ppa6::{Printer, FileBackend};
 use rayon::prelude::*;
 
 #[derive(Parser)]
 struct Cli {
 	/// Path to the file to be printed.
 	file: PathBuf,
+
+        /// Path to the device file.
+        #[arg(short, long)]
+        device: Option<PathBuf>,
 
 	/// Number of copies.
 	#[arg(short, long, default_value_t = 1)]
@@ -251,8 +255,12 @@ fn main() -> Result<()> {
 		})
 		.collect::<Vec<u8>>();
 
-	log::trace!("searching for printer...");
-	let mut printer = Printer::find()?;
+        let mut printer = if let Some(dev) = cli.device {
+                Printer::new(FileBackend::open(&dev)?)
+        } else {
+            log::trace!("searching for printer...");
+                Printer::find()?
+        };
 
 	log::trace!("resetting printer...");
 	printer.reset()?;

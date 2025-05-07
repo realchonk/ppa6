@@ -4,8 +4,9 @@ version = "0.1.0"
 edition = "2021"
 
 [features]
-default = ["usb"]
+default = ["usb", "file"]
 usb = ["dep:rusb"]
+file = []
 
 [dependencies]
 anyhow = "1.0.95"

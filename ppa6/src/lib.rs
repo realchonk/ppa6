@@ -16,6 +16,8 @@ macro_rules! backends {
 backends! [
 	#[cfg(feature = "usb")]
 	usb::UsbBackend,
+	#[cfg(feature = "file")]
+	file::FileBackend,
 ];
 
 
